@@ -22,7 +22,6 @@ import {
 } from "@/components/ui/select";
 import { Plus, User } from "lucide-react";
 import { useToast } from "@/components/ui/use-toast";
-import { supabase } from "@/integrations/supabase/client";
 
 interface AddUserDialogProps {
   onUserAdded?: () => void;
@@ -75,40 +74,31 @@ export function AddUserDialog({ onUserAdded }: AddUserDialogProps) {
 
     setLoading(true);
     try {
-      // get current session
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-
-      if (!session?.access_token) {
-        throw new Error("Not authenticated. Please log in again.");
-      }
-
-      // call the edge function with auth header
-      const { data, error } = await supabase.functions.invoke("create-user", {
-        body: {
+      // Call Netlify function instead of direct Supabase call
+      const response = await fetch('/.netlify/functions/create-user', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
           fullName: formData.fullName,
           username: formData.username,
           email: formData.email,
           phone: formData.phone,
           role: formData.role,
           password: formData.password,
-        },
-        headers: {
-          Authorization: `Bearer ${session.access_token}`,
-        },
+        }),
       });
 
-      if (error) throw error;
-      if (data && (data as any).error) {
-        throw new Error((data as any).error);
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error);
       }
 
       toast({
         title: "Success",
-        description:
-          (data && (data as any).message) ||
-          `User ${formData.fullName} created successfully`,
+        description: result.message || `User ${formData.fullName} created successfully`,
       });
 
       // reset form
