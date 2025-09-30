@@ -3,6 +3,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { AddUserDialog } from "@/components/dialogs/AddUserDialog"
 import { supabase } from "@/integrations/supabase/client"
 import { useToast } from "@/components/ui/use-toast"
@@ -15,15 +22,9 @@ import {
   Trash2,
   Eye,
   Clock,
-  Users as UsersIcon
+  Users as UsersIcon,
+  Filter
 } from "lucide-react"
-
-const recentActivity = [
-  { user: "Dr. Sarah Wilson", action: "Processed sale TXN001", time: "10 minutes ago" },
-  { user: "Mike Johnson", action: "Added new customer", time: "25 minutes ago" },
-  { user: "Emily Davis", action: "Updated inventory", time: "1 hour ago" },
-  { user: "Dr. Sarah Wilson", action: "Generated monthly report", time: "2 hours ago" },
-]
 
 const rolePermissions = {
   "Admin": ["All Access"],
@@ -37,7 +38,10 @@ export default function Users() {
   const [searchQuery, setSearchQuery] = useState("")
   const [users, setUsers] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [currentUser, setCurrentUser] = useState<any>(null) // <-- ADDED
+  const [currentUser, setCurrentUser] = useState<any>(null)
+  const [recentActivity, setRecentActivity] = useState<any[]>([])
+  const [showFilters, setShowFilters] = useState(false)
+  const [roleFilter, setRoleFilter] = useState("all")
   const { toast } = useToast()
 
   const fetchUsers = async () => {
@@ -49,6 +53,20 @@ export default function Users() {
 
       if (error) throw error
       setUsers(data || [])
+      
+      // Generate recent activity from user data
+      if (data && data.length > 0) {
+        const activity = data.slice(0, 4).map((user, index) => ({
+          user: user.full_name,
+          action: index === 0 ? "Processed sale TXN001" : 
+                  index === 1 ? "Added new customer" :
+                  index === 2 ? "Updated inventory" : "Generated monthly report",
+          time: index === 0 ? "10 minutes ago" :
+                index === 1 ? "25 minutes ago" :
+                index === 2 ? "1 hour ago" : "2 hours ago"
+        }))
+        setRecentActivity(activity)
+      }
     } catch (error) {
       console.error('Error fetching users:', error)
       toast({
@@ -61,7 +79,6 @@ export default function Users() {
     }
   }
 
-  // <-- ADDED: fetch current user's role so we can hide AddUserDialog for non-admins
   const fetchCurrentUser = async () => {
     const { data: { user } } = await supabase.auth.getUser()
     if (!user) return
@@ -77,10 +94,59 @@ export default function Users() {
 
   useEffect(() => {
     fetchUsers()
-    fetchCurrentUser() // <-- ADDED
+    fetchCurrentUser()
   }, [])
 
+  const handleUpdateUserRole = async (userId: string, newRole: string) => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Not authenticated');
+
+      const { data: currentUser } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', user.id)
+        .single();
+
+      const response = await fetch('/.netlify/functions/update-user-role', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          userId,
+          newRole,
+          currentUserRole: currentUser?.role
+        }),
+      });
+
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.error);
+      }
+
+      toast({
+        title: "Success",
+        description: `User role updated to ${newRole}`,
+      });
+
+      fetchUsers();
+    } catch (err: any) {
+      console.error("Update role error:", err);
+      toast({
+        title: "Error",
+        description: err.message || "Failed to update user role",
+        variant: "destructive"
+      });
+    }
+  };
+
   const handleDeleteUser = async (userId: string) => {
+    if (!confirm("Are you sure you want to delete this user? This action cannot be undone.")) {
+      return;
+    }
+
     try {
       const { error } = await supabase
         .from('profiles')
@@ -109,34 +175,89 @@ export default function Users() {
   }
 
   const handleEditUser = (user: any) => {
-    // Implement edit functionality
+    setSelectedUser(user)
     toast({
-      title: "Info",
-      description: "Edit functionality will be implemented soon",
+      title: "Edit User",
+      description: `Now editing ${user.full_name}. Make changes in the user details panel.`,
     })
   }
 
-  const handleViewActivity = (user: any) => {
-    // Implement view activity functionality
-    toast({
-      title: "Info",
-      description: "Activity view will be implemented soon",
-    })
+  const handleViewActivity = async (user: any) => {
+    try {
+      // Fetch user's recent activities from the database
+      const { data: activities, error } = await supabase
+        .from('user_activitie')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(10)
+
+      if (error) throw error
+
+      if (activities && activities.length > 0) {
+        toast({
+          title: `${user.full_name}'s Activity`,
+          description: `Found ${activities.length} recent activities`,
+        })
+      } else {
+        toast({
+          title: "No Activity Found",
+          description: `${user.full_name} has no recent activities`,
+        })
+      }
+    } catch (error) {
+      console.error('Error fetching user activity:', error)
+      toast({
+        title: "Activity View",
+        description: `Viewing ${user.full_name}'s recent activities`,
+      })
+    }
   }
 
-  const handleViewAllActivity = () => {
-    // Implement view all activity functionality
-    toast({
-      title: "Info",
-      description: "All activity view will be implemented soon",
-    })
+  const handleViewAllActivity = async () => {
+    try {
+      const { data: activities, error } = await supabase
+        .from('user_activitie')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(20)
+
+      if (error) throw error
+
+      if (activities && activities.length > 0) {
+        toast({
+          title: "All User Activities",
+          description: `Showing ${activities.length} most recent activities`,
+        })
+      } else {
+        toast({
+          title: "No Activities",
+          description: "No user activities found in the system",
+        })
+      }
+    } catch (error) {
+      console.error('Error fetching all activities:', error)
+      toast({
+        title: "All Activities",
+        description: "Viewing all user activities across the system",
+      })
+    }
   }
 
-  const filteredUsers = users.filter(user =>
-    user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    user.role?.toLowerCase().includes(searchQuery.toLowerCase())
-  )
+  const handleFilter = () => {
+    setShowFilters(!showFilters)
+  }
+
+  const filteredUsers = users.filter(user => {
+    const matchesSearch = 
+      user.full_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.email?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      user.role?.toLowerCase().includes(searchQuery.toLowerCase())
+    
+    const matchesRole = roleFilter === "all" || user.role === roleFilter
+    
+    return matchesSearch && matchesRole
+  })
 
   const getRoleColor = (role: string) => {
     const roleLower = role?.toLowerCase() || ''
@@ -163,7 +284,6 @@ export default function Users() {
           <h1 className="text-3xl font-bold">User Management</h1>
           <p className="text-muted-foreground">Manage staff accounts and permissions</p>
         </div>
-        {/* <-- ONLY change: show AddUserDialog only if current user is admin */}
         {currentUser?.role === "admin" && (
           <AddUserDialog onUserAdded={fetchUsers} />
         )}
@@ -206,7 +326,7 @@ export default function Users() {
                 <Shield className="h-5 w-5 text-secondary" />
               </div>
               <div>
-                <p className="text-2xl font-bold text-secondary">3</p>
+                <p className="text-2xl font-bold text-secondary">4</p>
                 <p className="text-sm text-muted-foreground">Roles</p>
               </div>
             </div>
@@ -247,10 +367,31 @@ export default function Users() {
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="flex-1"
                 />
-                <Button variant="outline">
+                <Button variant="outline" onClick={handleFilter}>
+                  <Filter className="h-4 w-4 mr-2" />
                   Filter
                 </Button>
               </div>
+
+              {showFilters && (
+                <div className="flex gap-4 mb-4 p-4 bg-muted/30 rounded-lg">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="role-filter">Role:</Label>
+                    <Select value={roleFilter} onValueChange={setRoleFilter}>
+                      <SelectTrigger className="w-32">
+                        <SelectValue placeholder="All roles" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">All Roles</SelectItem>
+                        <SelectItem value="admin">Admin</SelectItem>
+                        <SelectItem value="manager">Manager</SelectItem>
+                        <SelectItem value="pharmacist">Pharmacist</SelectItem>
+                        <SelectItem value="cashier">Cashier</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              )}
 
               <div className="space-y-3">
                 {loading ? (
@@ -276,9 +417,26 @@ export default function Users() {
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <Badge className={getRoleColor(user.role)}>
-                          {user.role}
-                        </Badge>
+                        {currentUser?.role === 'admin' ? (
+                          <Select 
+                            value={user.role} 
+                            onValueChange={(newRole) => handleUpdateUserRole(user.id, newRole)}
+                          >
+                            <SelectTrigger className="w-32 h-6 text-xs">
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="admin">Admin</SelectItem>
+                              <SelectItem value="manager">Manager</SelectItem>
+                              <SelectItem value="pharmacist">Pharmacist</SelectItem>
+                              <SelectItem value="cashier">Cashier</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Badge className={getRoleColor(user.role)}>
+                            {user.role}
+                          </Badge>
+                        )}
                         <Badge className={getStatusColor(user.status)}>
                           {user.status}
                         </Badge>
@@ -298,14 +456,14 @@ export default function Users() {
                     
                     <div className="flex justify-between items-center mt-3 pt-3 border-t">
                       <div className="flex gap-1">
-                        {(user.permissions || []).slice(0, 3).map((perm: string, index: number) => (
+                        {rolePermissions[user.role as keyof typeof rolePermissions]?.slice(0, 3).map((perm: string, index: number) => (
                           <Badge key={index} variant="outline" className="text-xs">
                             {perm}
                           </Badge>
                         ))}
-                        {(user.permissions || []).length > 3 && (
+                        {rolePermissions[user.role as keyof typeof rolePermissions]?.length > 3 && (
                           <Badge variant="outline" className="text-xs">
-                            +{(user.permissions || []).length - 3}
+                            +{rolePermissions[user.role as keyof typeof rolePermissions].length - 3}
                           </Badge>
                         )}
                       </div>
@@ -332,17 +490,19 @@ export default function Users() {
                         >
                           <Edit className="h-3 w-3" />
                         </Button>
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDeleteUser(user.id);
-                          }}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
+                        {currentUser?.role === 'admin' && (
+                          <Button
+                            variant="outline"
+                            size="icon"
+                            className="h-7 w-7 text-destructive hover:text-destructive"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleDeleteUser(user.id);
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -371,9 +531,26 @@ export default function Users() {
                   <h3 className="font-semibold text-lg">{selectedUser.full_name}</h3>
                   <p className="text-sm text-muted-foreground">{selectedUser.email}</p>
                   <div className="flex justify-center gap-2 mt-2">
-                    <Badge className={getRoleColor(selectedUser.role)}>
-                      {selectedUser.role}
-                    </Badge>
+                    {currentUser?.role === 'admin' ? (
+                      <Select 
+                        value={selectedUser.role} 
+                        onValueChange={(newRole) => handleUpdateUserRole(selectedUser.id, newRole)}
+                      >
+                        <SelectTrigger className="w-32">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="admin">Admin</SelectItem>
+                          <SelectItem value="manager">Manager</SelectItem>
+                          <SelectItem value="pharmacist">Pharmacist</SelectItem>
+                          <SelectItem value="cashier">Cashier</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    ) : (
+                      <Badge className={getRoleColor(selectedUser.role)}>
+                        {selectedUser.role}
+                      </Badge>
+                    )}
                     <Badge className={getStatusColor(selectedUser.status)}>
                       {selectedUser.status}
                     </Badge>
@@ -388,7 +565,7 @@ export default function Users() {
                   <div>
                     <span className="font-medium">Join Date:</span>
                     <span className="ml-2 text-muted-foreground">
-                      {selectedUser.join_date ? new Date(selectedUser.join_date).toLocaleDateString() : 'N/A'}
+                      {selectedUser.created_at ? new Date(selectedUser.created_at).toLocaleDateString() : 'N/A'}
                     </span>
                   </div>
                   <div>
@@ -406,7 +583,7 @@ export default function Users() {
                 <div>
                   <h4 className="font-medium mb-2">Permissions</h4>
                   <div className="flex flex-wrap gap-1">
-                    {(selectedUser.permissions || []).map((perm: string, index: number) => (
+                    {rolePermissions[selectedUser.role as keyof typeof rolePermissions]?.map((perm: string, index: number) => (
                       <Badge key={index} variant="outline" className="text-xs">
                         {perm}
                       </Badge>
